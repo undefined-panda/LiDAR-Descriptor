@@ -130,7 +130,6 @@ class M2DP():
 
         return np.concatenate([u1, v1])
 
-
 class M2DP_Vectorized():
 
     """
@@ -139,18 +138,23 @@ class M2DP_Vectorized():
     Original Paper: M2DP: A Novel 3D Point Cloud Descriptor and Its Application in Loop Closure Detection (https://ieeexplore.ieee.org/document/7759060)
     """
 
-    def __init__(self, l, t, p, q):
+    def __init__(self, pc, l, t, p, q):
         """
         :param l: Number of concentric circles
         :param t: Number of bins per circle
         :param p: Number of 2D planes (azimuth)
         :param q: Number of 2D planes (elevation)
         """
-        
+        self.pc = pc
         self.l = l 
         self.t = t
         self.p = p
         self.q = q
+
+        self.compute(pc)
+    
+    def get_signature_vector(self):
+        return self.v_x
 
     def preprocess_point_cloud(self, pc):
         """
@@ -169,7 +173,7 @@ class M2DP_Vectorized():
         
         x_axis, y_axis = axes[0], axes[1]
 
-        return centroid, pc_shifted, x_axis
+        return np.zeros(3), pc_shifted, x_axis
     
     def create_normal_vectors(self, theta, phi):
         cos_theta = np.cos(theta)
@@ -184,10 +188,17 @@ class M2DP_Vectorized():
         return np.stack([m_x, m_y, m_z], axis=1)
 
     def plane_basis_from_normal(self, m):
-        ref_vec = np.array([1.0, 0.0, 0.0])
-        h = m @ ref_vec
+        ref_vec = np.tile(np.array([1.0, 0.0, 0.0], dtype=np.float32), (16, 1))
+        mask = np.abs(m[:, 0]) > 0.9
+        ref_vec[mask] = np.array([0.0, 1.0, 0.0], dtype=np.float32) 
+
+        h = np.sum(m * ref_vec, axis=1)
         e1 = ref_vec - h[:, np.newaxis] * m
         e2 = np.cross(m, e1)
+
+        # normalize
+        e1 = e1 / (np.linalg.norm(e1, axis=1, keepdims=True) + 1e-12)
+        e2 = e2 / (np.linalg.norm(e2, axis=1, keepdims=True) + 1e-12)
 
         return e1, e2
     
@@ -251,7 +262,6 @@ class M2DP_Vectorized():
 
     def compute(self, pc):
         centroid, pc_shifted, x_axis = self.preprocess_point_cloud(pc)
-        num_sign_vec = 0
         
         # generate angles
         theta_rng = np.arange(0, np.pi, np.pi / self.p)
@@ -269,4 +279,4 @@ class M2DP_Vectorized():
         u1 = U[:, 0]
         v1 = Vt[0, :]
 
-        return np.concatenate([u1, v1])
+        self.v_x = np.concatenate([u1, v1])
