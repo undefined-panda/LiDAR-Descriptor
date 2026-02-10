@@ -160,20 +160,29 @@ class M2DP_Vectorized():
         """
         Shift point cloud and perform PCA to create a coordinate system.
         """
+        P = pc[:, :3].astype(np.float32)
 
         # shift x,y,z - points
-        centroid = np.mean(pc[:, :3], axis=0)
-        pc_shifted = pc[:,:3].copy()
-        pc_shifted -= centroid
+        centroid = P.mean(axis=0)
+        P_shifted = P - centroid
 
         # get orientation of point cloud with pca
         pca = PCA(n_components=3)
-        pca.fit(pc_shifted)
-        axes = pca.components_
-        
-        x_axis, y_axis = axes[0], axes[1]
+        pca.fit(P_shifted)
+        axes = pca.components_.astype(np.float32) 
 
-        return np.zeros(3), pc_shifted, x_axis
+        # rotate into PCA frame
+        P_pca = P_shifted @ axes.T
+        centroid_pca = np.zeros(3, dtype=np.float32)
+
+        # sign ambiguity fix
+        for k in range(3):
+            if np.sum(P_pca[:, k]) < 0:
+                axes[k, :] *= -1.0
+        
+        x_axis = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+
+        return centroid_pca, P_pca, x_axis
     
     def create_normal_vectors(self, theta, phi):
         cos_theta = np.cos(theta)
@@ -188,7 +197,7 @@ class M2DP_Vectorized():
         return np.stack([m_x, m_y, m_z], axis=1)
 
     def plane_basis_from_normal(self, m):
-        ref_vec = np.tile(np.array([1.0, 0.0, 0.0], dtype=np.float32), (16, 1))
+        ref_vec = np.tile(np.array([1.0, 0.0, 0.0], dtype=np.float32), (m.shape[0], 1))
         mask = np.abs(m[:, 0]) > 0.9
         ref_vec[mask] = np.array([0.0, 1.0, 0.0], dtype=np.float32) 
 
@@ -280,3 +289,7 @@ class M2DP_Vectorized():
         v1 = Vt[0, :]
 
         self.v_x = np.concatenate([u1, v1])
+
+        # normalize
+        n = np.linalg.norm(self.v_x) + 1e-12
+        self.v_x = self.v_x / n

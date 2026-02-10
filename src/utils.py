@@ -1,9 +1,9 @@
-from src.read_vel_hits import read_lidar_scans
 from src.descriptor import M2DP_Vectorized
 import numpy as np
 from tqdm import tqdm
 import os
-import glob
+from glob import glob
+import pandas as pd
 
 def read_lidar_scans(path):
     try:
@@ -21,6 +21,21 @@ def read_lidar_scans(path):
         return points
     except Exception as e:
         return np.zeros((0, 3))
+
+def save_timestamps(folder, output_folder):
+    bin_files = folder.glob("*.bin")
+    output_dir = f"{output_folder}/{folder.parent.name}.csv"
+    os.makedirs(output_folder, exist_ok=True)
+
+    file_names = []
+
+    for file_path in tqdm(bin_files, desc=f"Writing timestamps in {output_dir}"):
+        file_name = file_path.name
+        file_names.append(file_name.removesuffix(".bin"))
+
+    df = pd.DataFrame(file_names, columns=["timestamps"])
+    df.to_csv(output_dir, index=False)
+    print("CSV saved.\n") 
 
 def calculate_m2dp_descriptor(folder, output_dir, l=8, t=16, p=4, q=4, save=True):
     session_day = folder.parent.name
