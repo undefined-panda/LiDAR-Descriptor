@@ -1,61 +1,71 @@
-from src.descriptor import M2DP_Vectorized
-import numpy as np
 from tqdm import tqdm
 import os
-from glob import glob
-import pandas as pd
+import numpy as np
+from concurrent.futures import ProcessPoolExecutor
+from functools import partial
+from src.read_vel_sync import read_vel_sync
+from src.m2dp_descriptor import compute_m2dp_signature_vectors
 
-def read_lidar_scans(path):
-    try:
-        with open(path, 'rb') as f:
-            content = f.read()
-        num_points = len(content) // 8
-        dt = np.dtype([('x', np.uint16), ('y', np.uint16), ('z', np.uint16), ('i', np.uint8), ('l', np.uint8)])
-        raw = np.frombuffer(content, dtype=dt)
-        
-        points = np.empty((num_points, 3), dtype=np.float32)
-        # NCLT scaling: (value * 0.005) - 100.0
-        points[:, 0] = (raw['x'].astype(np.float32) * 0.005) - 100.0
-        points[:, 1] = (raw['y'].astype(np.float32) * 0.005) - 100.0
-        points[:, 2] = (raw['z'].astype(np.float32) * 0.005) - 100.0
-        return points
-    except Exception as e:
-        return np.zeros((0, 3))
+def remove_nan(df):
+    for column in df.columns:
+        df[column] = df[column].astype("float64")
+    
+    df = df.dropna()
 
-def save_timestamps(folder, output_folder):
-    bin_files = folder.glob("*.bin")
-    output_dir = f"{output_folder}/{folder.parent.name}.csv"
-    os.makedirs(output_folder, exist_ok=True)
+    return df
 
-    file_names = []
+def process_file(file_path, l, t, p, q):
+    timestamp = file_path.stem
 
-    for file_path in tqdm(bin_files, desc=f"Writing timestamps in {output_dir}"):
-        file_name = file_path.name
-        file_names.append(file_name.removesuffix(".bin"))
+    pc = read_vel_sync(file_path)
+    
+    m2dp_descriptors = compute_m2dp_signature_vectors(pc, l, t, p, q)
 
-    df = pd.DataFrame(file_names, columns=["timestamps"])
-    df.to_csv(output_dir, index=False)
-    print("CSV saved.\n") 
+    return timestamp, m2dp_descriptors
 
-def calculate_m2dp_descriptor(folder, output_dir, l=8, t=16, p=4, q=4, save=True):
+def calculate_m2dp_descriptor(folder, output_dir, l=8, t=16, p=4, q=4, save=True, parallelize=True):
     session_day = folder.parent.name
-    descriptors = []
     bin_files = sorted(folder.glob("*.bin"))
     print(f"Found {len(bin_files)} scans in {folder}.")
 
-    # read bin files and calculate M2DP descriptor for each point cloud
-    for file_path in tqdm(bin_files, desc=f"Processing bin files from {session_day}"):
-        pc = read_lidar_scans(file_path)
-        m2dp = M2DP_Vectorized(pc, l, t, p, q)
-        descriptor = m2dp.get_signature_vector()
-        descriptors.append(descriptor)
+    if parallelize:
+        print("Parallelizing process with multi-threading.")
+        fn = partial(process_file, l=l, t=t, p=p, q=q)
+        
+        with ProcessPoolExecutor() as ex:
+            results = list(tqdm(
+                ex.map(fn, bin_files),
+                total=len(bin_files),
+                desc="Processing files"
+            ))
     
+        timestamps, descriptors = map(list, zip(*results))
+    else:
+        # read bin files and calculate M2DP descriptor for each point cloud
+        timestamps = []
+        descriptors = []
+        for file_path in tqdm(bin_files, desc=f"Processing bin files from {session_day}"):
+            timestamp = file_path.stem
+
+            pc = read_vel_sync(file_path, True, f"data/velodyne_csv/{session_day}.csv")
+
+            m2dp_descriptors = compute_m2dp_signature_vectors(pc, l, t, p, q)
+
+            timestamps.append(timestamp)
+            descriptors.append(m2dp_descriptors)
+    
+    timestamps_np = np.array(timestamps)
     descriptors_np = np.array(descriptors)
 
     # save descriptors
     if save:
-        output_filename = f"m2dp_{session_day}.npy"
         os.makedirs(output_dir, exist_ok=True)
-        np.save(output_dir+"/"+output_filename, descriptors_np)
-        print(f"Done. Matrix Shape: {descriptors_np.shape}")
-        print(f"Saved to {output_dir+"/"+output_filename}\n")
+
+        descriptors_output_filename = f"m2dp_{session_day}.npy"
+        timestamps_output_filename = f"timestamps_{session_day}.npy"
+        np.save(output_dir+"/descriptors/"+descriptors_output_filename, descriptors_np)
+        np.save(output_dir+"/timestamps/"+timestamps_output_filename, timestamps_np)
+
+        print(f"Done. Signature vector matrix shape: {descriptors_np.shape}")
+        print(f"Descriptors saved in {output_dir+"/descriptors/"+descriptors_output_filename}")
+        print(f"Timestamps saved in {output_dir+"/timestamps/"+timestamps_output_filename}")
