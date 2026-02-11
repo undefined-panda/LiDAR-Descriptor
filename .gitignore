@@ -1,3 +1,5 @@
 notes.txt
-/data
+data/gt_cov
+data/velodyne
 src/__pycache__
+main_backup.ipynb
