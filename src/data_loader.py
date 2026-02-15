@@ -33,26 +33,24 @@ def load_descriptors_timestamps(descriptors_folder, day):
 
     return timestamps
 
-def load_gt_data(gt_pose_folder, gt_timestamp_folder, day):
+def load_gt_data(gt_pose_folder, day):
     gt_csv_path = f"{gt_pose_folder}/groundtruth_{day}.csv"
     gt = pd.read_csv(gt_csv_path, 
                      header=None, 
                      names=["timestamp", "x", "y", "z", "roll", "pitch", "yaw"]
                      )
     gt = remove_nan(gt)
-    gt_timestamps = pd.read_csv(f"{gt_timestamp_folder}/{day}.csv").to_numpy().flatten()
     print(f"Ground Truth data: {gt_csv_path}")
-    print(f"Ground truth timestamps: {gt_timestamp_folder}")
 
-    return gt, gt_timestamps
+    return gt
 
-def load_place_recognition_data(p, descriptors_folder, gt_pose_folder, gt_timestamp_folder):
+def load_place_recognition_data(p, descriptors_folder, gt_pose_folder):
     day = p.name.split("_")[1].removesuffix(".npy")
 
     descriptors = load_descriptors(descriptors_folder, day)
     timestamps = load_descriptors_timestamps(descriptors_folder, day)
-    gt, gt_timestamps = load_gt_data(gt_pose_folder, gt_timestamp_folder, day)
+    gt = load_gt_data(gt_pose_folder, day)
 
     print()
 
-    return descriptors, timestamps, gt, gt_timestamps
+    return descriptors, timestamps, gt

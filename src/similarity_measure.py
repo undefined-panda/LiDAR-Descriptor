@@ -1,7 +1,6 @@
 from tqdm import tqdm
 import numpy as np
 from scipy.interpolate import interp1d
-import matplotlib.pyplot as plt
 
 def retrieve_candidates(descriptors, window, tau, topk=1):
     """
@@ -65,8 +64,9 @@ def retrieve_loop_pos(loop_candidates, timestamps, gt, time_window, r):
     )
 
     candidates_loop_pos = []
-    gt_loop_pos = []
-    for i, j, _ in tqdm(loop_candidates, desc="Computing loop candidate positions & Extracting ground truth loop positions"):
+    y_true = []
+    y_score = []
+    for i, j, score in tqdm(loop_candidates, desc="Computing loop candidate positions & Extracting ground truth loop positions"):
         t_i = timestamps[int(i)]
         t_j = timestamps[int(j)]
 
@@ -75,64 +75,45 @@ def retrieve_loop_pos(loop_candidates, timestamps, gt, time_window, r):
 
         if not (np.any(np.isnan(p_i)) or np.any(np.isnan(p_j))):
             candidates_loop_pos.append((p_i, p_j))
-        
-        time_diff = np.abs(t_i.astype(float) - t_j.astype(float)) * 1e-6
-        if time_diff > time_window:
-            if np.linalg.norm(p_i - p_j) < r:
-                gt_loop_pos.append((p_i, p_j))
+            time_diff = (t_i.astype(np.int64) - t_j.astype(np.int64)) * 1e-6
+            dist = np.linalg.norm(p_i - p_j)
+            if (time_diff > time_window) and (dist < r):
+                y_true.append(1)
+            else:
+                y_true.append(0)
+            
+            y_score.append(score)
     
-    return candidates_loop_pos, gt_loop_pos
+    return candidates_loop_pos, y_true, y_score
 
-def visualize_trajectory(trajectory, candidates_loop_pos, gt_loop_pos, day):
-    x = trajectory[:, 0]
-    y = trajectory[:, 1]
-
-    fig, axes = plt.subplots(1, 2, figsize=(12, 8))
-
-    # left with lines, right with dots
-    for i, (p_i, p_j) in enumerate(candidates_loop_pos):
-        if i == 0:
-            axes[0].plot([p_i[0], p_j[0]], [p_i[1], p_j[1]], color="red", markersize=15, alpha=0.3, zorder=2, label="Descriptor loops")
-            axes[1].scatter(p_i[0], p_i[1], color="red", s=10, alpha=0.3, zorder=2, label="Descriptor loops")
-        else:
-            axes[0].plot([p_i[0], p_j[0]], [p_i[1], p_j[1]], markersize=15, color="red", alpha=0.3, zorder=2)
-            axes[1].scatter(p_i[0], p_i[1], color="red", s=10, alpha=0.3, zorder=2)
-
-    for i, (p_i, p_j) in enumerate(gt_loop_pos):
-        if i == 0:
-            axes[0].plot([p_i[0], p_j[0]], [p_i[1], p_j[1]], markersize=15, color="green", alpha=0.3, zorder=3, label="GT loops")
-            axes[1].scatter(p_i[0], p_i[1], color="green", s=8, alpha=0.3, zorder=3, label="GT loops")
-        else:
-            axes[0].plot([p_i[0], p_j[0]], [p_i[1], p_j[1]], markersize=15, color="green", alpha=0.3, zorder=3)
-            axes[1].scatter(p_i[0], p_i[1], color="green", s=8, alpha=0.3, zorder=3)    
-
-    for i in range(len(axes)):
-        axes[i].scatter(x, y, color='lightgray', s=15, label='Robot Trajectory', zorder=1)
-        axes[i].set_title(f"Trajectory Visualization of {day}")
-        axes[i].set_xlabel("x (m)")
-        axes[i].set_ylabel("y (m)")
-        axes[i].axis('equal')
-        axes[i].legend()
-        axes[i].grid(True, linestyle=':', alpha=0.6)
-    
-    plt.tight_layout()
-    plt.show()
-
-def get_gt_trajectory(gt, timestamps):
+def compute_gt_loops_pos(timestamps, gt, time_window, r):
     gt_sorted = gt.sort_values("timestamp")
-
     ts_gt = gt_sorted["timestamp"].to_numpy()
-    x_gt = gt_sorted["x"].to_numpy()
-    y_gt = gt_sorted["y"].to_numpy()
+    pos_gt = gt_sorted[["x", "y"]].to_numpy()
 
-    timestamps = np.asarray(timestamps).reshape(-1)
-    mask = (timestamps >= ts_gt[0]) & (timestamps <= ts_gt[-1])
-    timestamps = timestamps[mask]
+    interp_pos = interp1d(
+        ts_gt,
+        pos_gt,
+        axis=0,
+        kind="linear",
+        bounds_error=False,
+        fill_value=np.nan
+    )
 
-    interpld_x = interp1d(ts_gt, x_gt, kind="linear")
-    interpld_y = interp1d(ts_gt, y_gt, kind="linear")
+    gt_loops = []
+    for i in range(len(timestamps)):
+        for j in range(i):
+            t_i = timestamps[int(i)]
+            t_j = timestamps[int(j)]
 
-    x = interpld_x(timestamps)
-    y = interpld_y(timestamps)
+            p_i = interp_pos(t_i)
+            p_j = interp_pos(t_j)
 
-    return np.column_stack((x, y)), mask
+            if not (np.any(np.isnan(p_i)) or np.any(np.isnan(p_j))):
+                # time diff check
+                if (np.abs(t_i - t_j) / np.timedelta64(1, 's')) > time_window:
+                    # pos diff check
+                    if np.linalg.norm(p_i - p_j) < r:
+                        gt_loops.append((i, j))
+    
+    return gt_loops
